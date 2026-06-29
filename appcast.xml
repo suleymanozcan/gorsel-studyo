@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Görsel Stüdyo — Sparkle appcast (TEMPLATE / initial state).
+
+  This file is the update feed Sparkle polls (configured via SUFeedURL in the
+  app's Info.plist). It is hosted at:
+
+      https://compress.suleymanozcan.com/appcast.xml
+
+  DO NOT hand-edit the <item> entries. On each release the CI/release step runs
+  Sparkle's `generate_appcast` against the directory containing the signed,
+  notarized update archive (GorselStudyo.zip / GorselStudyo.dmg). That tool:
+    - reads CFBundleVersion / CFBundleShortVersionString from the bundle,
+    - computes the enclosure length,
+    - signs the archive with the EdDSA private key (sparkle:edSignature),
+    - rewrites this appcast.xml with a fresh <item>.
+
+  See native/sparkle/README.md for the exact commands and version-bump rules.
+  The single placeholder <item> below documents the expected shape; it will be
+  replaced wholesale by generate_appcast on the first real release.
+-->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>Görsel Stüdyo</title>
+        <link>https://compress.suleymanozcan.com/appcast.xml</link>
+        <description>Görsel Stüdyo için en güncel sürümler.</description>
+        <language>tr</language>
+        <item>
+            <title>Sürüm 1.0</title>
+            <link>https://github.com/suleymanozcan/gorsel-studyo/releases/latest</link>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>1.0</sparkle:shortVersionString>
+            <description><![CDATA[İlk genel sürüm.]]></description>
+            <pubDate>Mon, 29 Jun 2026 18:16:22 +0000</pubDate>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure
+                url="https://github.com/suleymanozcan/gorsel-studyo/releases/latest/download/GorselStudyo.dmg"
+                sparkle:version="1"
+                sparkle:shortVersionString="1.0"
+                length="82821182"
+                type="application/octet-stream"
+                sparkle:edSignature="v/TffmMwYiBeFiu6OusPZmO7JBW4JypE7zZ/xgVa8Ql8VUFBckpWjgMdvctJjaytEeiquQXYLNufumU1ApebBA==" />
+        </item>
+    </channel>
+</rss>

@@ -1,0 +1,25 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Derlenmiş / dağıtım çıktıları (ikililer Releases'a yüklenir, depoya değil)
+*.dmg
+*.app/
+*.zip
+*.pkg
+*.xcarchive/
+build/
+dist/
+
+# Geçici
+*.log
+*.tmp
+.cache/
+
+# Editör
+.idea/
+.vscode/
+*.swp

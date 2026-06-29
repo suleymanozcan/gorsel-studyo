@@ -1,0 +1,175 @@
+name: Release (build → notarize → appcast → release)
+
+# Görsel Stüdyo release pipeline.
+#
+# This repository holds ONLY the binary distribution (installer + appcast). The
+# application source code lives in a SEPARATE PRIVATE repository, which this
+# workflow checks out (using the SOURCE_REPO_TOKEN secret) in order to build a
+# Developer ID signed, notarized, stapled DMG, then:
+#   1. builds + signs + notarizes + staples GorselStudyo.dmg,
+#   2. computes GorselStudyo.dmg.sha256,
+#   3. signs the DMG with the Sparkle EdDSA private key and rewrites appcast.xml,
+#   4. commits the updated appcast.xml back to this repo,
+#   5. creates the GitHub Release and uploads both assets.
+#
+# All sensitive material is referenced via `secrets.*` ONLY. No secret values
+# are stored in this file. See "CI_SETUP" in README.md for the exact list of
+# repository secrets you must add before this workflow can run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create the Release and push the appcast commit
+
+jobs:
+  release:
+    runs-on: macos-14
+    env:
+      # Non-sensitive build config. The Developer ID team that signs the app.
+      DEVELOPER_ID_TEAM: A7H2XXDF8W
+      DMG_ASSET_NAME: GorselStudyo.dmg
+    steps:
+      - name: Checkout distribution repo (this repo)
+        uses: actions/checkout@v4
+
+      - name: Checkout application SOURCE (private)
+        uses: actions/checkout@v4
+        with:
+          # Set SOURCE_REPO to "owner/name" of the private source repo via secret,
+          # and SOURCE_REPO_TOKEN to a PAT (or fine-grained token) with `repo`
+          # read access to it.
+          repository: ${{ secrets.SOURCE_REPO }}
+          token: ${{ secrets.SOURCE_REPO_TOKEN }}
+          path: source
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install build tooling
+        run: |
+          brew install xcodegen || true
+          gem install fastlane --no-document || sudo gem install fastlane --no-document
+
+      - name: Import Developer ID certificate into a temporary keychain
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD:   ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD:     ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          CERT_PATH="$RUNNER_TEMP/devid.p12"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$CERT_PATH" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/productsign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+      - name: Write App Store Connect API key (.p8)
+        env:
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID:        ${{ secrets.ASC_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          echo "$ASC_KEY_P8_BASE64" | base64 --decode > "$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+      - name: Build, sign, notarize & staple DMG (fastlane mac_release)
+        working-directory: source/native
+        env:
+          ASC_KEY_ID:    ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_PATH:  ${{ env.HOME }}/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+          DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+        run: |
+          set -euo pipefail
+          fastlane mac_release
+          # fastlane writes the notarized, stapled DMG here:
+          cp build/ImageToolkitApp.dmg "$GITHUB_WORKSPACE/$DMG_ASSET_NAME"
+
+      - name: Compute SHA-256
+        run: shasum -a 256 "$DMG_ASSET_NAME" | awk '{print $1"  '"$DMG_ASSET_NAME"'"}' > "$DMG_ASSET_NAME.sha256"
+
+      - name: Sign DMG with Sparkle EdDSA key and update appcast.xml
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          KEYFILE="$RUNNER_TEMP/eddsa_private_key.txt"
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$KEYFILE"
+          SIGN_UPDATE=$(find source/native -path '*/artifacts/sparkle/Sparkle/bin/sign_update' 2>/dev/null | head -n1)
+          if [ -z "$SIGN_UPDATE" ]; then
+            SIGN_UPDATE=$(find "$HOME/Library/Developer/Xcode/DerivedData" -path '*/artifacts/sparkle/Sparkle/bin/sign_update' 2>/dev/null | head -n1)
+          fi
+          ENCLOSURE=$("$SIGN_UPDATE" "$DMG_ASSET_NAME" --ed-key-file "$KEYFILE")
+          echo "Computed enclosure attrs: $ENCLOSURE"
+          ED_SIG=$(echo "$ENCLOSURE" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          LENGTH=$(echo "$ENCLOSURE" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+          SHORT_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+            source/native/ImageToolkitApp/Resources/Info.plist 2>/dev/null || echo "1.0")
+          BUILD_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" \
+            source/native/ImageToolkitApp/Resources/Info.plist 2>/dev/null || echo "1")
+          PUBDATE=$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")
+          # Regenerate appcast.xml from the canonical template.
+          python3 - "$ED_SIG" "$LENGTH" "$SHORT_VERSION" "$BUILD_VERSION" "$PUBDATE" <<'PY'
+          import sys
+          sig, length, short, build, pub = sys.argv[1:6]
+          tpl = f'''<?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+              <channel>
+                  <title>Görsel Stüdyo</title>
+                  <link>https://compress.suleymanozcan.com/appcast.xml</link>
+                  <description>Görsel Stüdyo için en güncel sürümler.</description>
+                  <language>tr</language>
+                  <item>
+                      <title>Sürüm {short}</title>
+                      <link>https://github.com/suleymanozcan/gorsel-studyo/releases/latest</link>
+                      <sparkle:version>{build}</sparkle:version>
+                      <sparkle:shortVersionString>{short}</sparkle:shortVersionString>
+                      <description><![CDATA[Sürüm {short}.]]></description>
+                      <pubDate>{pub}</pubDate>
+                      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                      <enclosure
+                          url="https://github.com/suleymanozcan/gorsel-studyo/releases/latest/download/GorselStudyo.dmg"
+                          sparkle:version="{build}"
+                          sparkle:shortVersionString="{short}"
+                          length="{length}"
+                          type="application/octet-stream"
+                          sparkle:edSignature="{sig}" />
+                  </item>
+              </channel>
+          </rss>
+          '''
+          open("appcast.xml","w").write(tpl)
+          PY
+
+      - name: Commit updated appcast.xml
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          git commit -m "ci: update appcast for ${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}" || echo "no changes"
+          git push origin HEAD:main || echo "push skipped"
+
+      - name: Create GitHub Release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          gh release create "$TAG" \
+            --title "Görsel Stüdyo ${TAG#v}" \
+            --notes "Otomatik sürüm: $TAG" \
+            "$DMG_ASSET_NAME" "$DMG_ASSET_NAME.sha256"
