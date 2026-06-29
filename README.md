@@ -9,9 +9,11 @@ cihazınızda, yerel olarak çalışır.
 
 ## Ekran Görüntüleri
 
+![macOS ana ekran](screenshots/macos-home.png)
+
 | | |
 | --- | --- |
-| ![Ana ekran](screenshots/iphone-home.png) | ![Geniş görünüm](screenshots/ipad-home.png) |
+| ![iPhone ana ekran](screenshots/iphone-home.png) | ![iPad geniş görünüm](screenshots/ipad-home.png) |
 
 ## Kurulum
 
@@ -55,7 +57,7 @@ Nadiren bir indirme/aktarım sorunu nedeniyle uyarı görürseniz, uygulamaya
 kaldırabilirsiniz:
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/ImageToolkitApp.app"
+xattr -dr com.apple.quarantine "/Applications/Görsel Stüdyo.app"
 ```
 
 ## Kaldırma
@@ -64,11 +66,12 @@ xattr -dr com.apple.quarantine "/Applications/ImageToolkitApp.app"
 # npm ile kurduysanız:
 npm rm -g gorsel-studyo
 # Uygulamayı silin:
-rm -rf "/Applications/ImageToolkitApp.app"
+rm -rf "/Applications/Görsel Stüdyo.app"
 ```
 
 ## Sürümler ve Lisans
 
+- Güncel sürüm: **1.0.1**
 - Sürümler: bkz. [Releases](https://github.com/suleymanozcan/gorsel-studyo/releases)
 - Lisans: bkz. [LICENSE](./LICENSE) — kapalı kaynaklı, ücretsiz dağıtılabilir
   son kullanıcı lisansı (EULA).
